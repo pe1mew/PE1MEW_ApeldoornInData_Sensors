@@ -73,14 +73,14 @@ uint8_t lppChannel { 0 };         /// LPP channel iterator
 #if defined(OTAA) 
   // Production sensor aid-10
   // Set your AppEUI and AppKey 
-  const char *appEui = "70B3D57EF00058B7";
-  const char *appKey = "4BECE1EDAB1D60CA9D62E5479ED16A1C";
+  const char *appEui = "xxxxxxxxxxxxxxxx";
+  const char *appKey = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 #elif defined(ABP)
   // test sensor aid-2
   // Set your DevAddr, NwkSKey, AppSKey and the frequency plan
-  const char *devAddr = "26011AB4";
-  const char *nwkSKey = "6F46D114B12D2E9ADE8E9D1F87CF185A";
-  const char *appSKey = "68C56B2CB76835EBC3E322F3C47575BB";
+  const char *devAddr = "xxxxxxxx";
+  const char *nwkSKey = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  const char *appSKey = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 #else
   #error "No personalisation configured."
 #endif
