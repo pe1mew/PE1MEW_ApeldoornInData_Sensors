@@ -15,14 +15,14 @@
 
 /*!
 
- \file AID_UNO_01.ino
+ \file AID_UNO.ino
  \brief RFSee ApeldoornInData node
- \date 30-9-2019
+ \date See revision table
  \author Remko Welling (RFSee)
- \version 12
+ \version See revision table
   
  */
-#define RELEASE   12    ///< Software version of the sketch
+#define RELEASE   13    ///< Software version of the sketch
 /*!
  Release histroy
  ---------------
@@ -33,6 +33,7 @@
  10     | 28-9-2019  | New release for using with SCD30
  11     | 30-9-2019  | Added function to store TX interval in EEPROM for reuse at reboot when set remote.
  12     | 30-9-2019  | Added hardware support for different temp/hum/barometer/luminosity sensor.
+ 13     | 25-3-2020  | Added hardware support for Marvin LoRa board and BMP280.
 
  Configure for programming the board
  -----------------------------------
@@ -50,15 +51,18 @@
 
 #include "AID_UNO_config.h"       // Configuriation file for node
 #include <Wire.h>                 // Library for I2C
+#include <avr/wdt.h>              // Watchdog 
 #include "CayenneLPP.h"           // Library for Cayenne library
 #include "TheThingsNetwork.h"     // Library for TTN Network (Uno)
 #include "SDS011.h"               // Library for SDS011 Particle sensor
 #include "RunningAverage.h"       // Running average library
 #include "PE1MEW_EEPROM.h"        // EEPROM library for PE1MEW LoRaWAN sensors
 
-#if defined(SENSOR_SCD30)
+#if defined(SENSOR_BMP280)
+  #include <BMx280I2C.h>          //
+#elif defined(SENSOR_SCD30)
   #include "SparkFun_SCD30_Arduino_Library.h" //Click here to get the library: http://librarymanager/All#SparkFun_SCD30
-#elif defined(SENSOR_BMPSHT2)
+#elif defined(SENSOR_BMP085SHT2X)
   #include <Adafruit_BMP085.h>    // Library for pressure
   #include <Sodaq_SHT2x.h>        // Library for temperature and humidity
   //#include <BH1750.h>           // Library for lightmeter
@@ -91,14 +95,19 @@ RunningAverage p10Buffer(MEASUREMENTS);   ///< Running average buffers for p10 p
 // ---------------------------------
 // Because of the coice for using 2 sensor types these can be selected in file: AID_UNO_config.h
 
-float humidity { 0.0 };                   ///< Variables to hold humidity value
 float temperature { 0.0 };                ///< Variables to hold temperature value
 
-#if defined(SENSOR_SCD30)
+#if defined(SENSOR_BMP280)
+  #define I2C_ADDRESS 0x76
+  BMx280I2C bmx280(I2C_ADDRESS);          ///< create a BMx280I2C object using the I2C interface with I2C Address 0x76
+  float pressure { 0.0 };                 ///< Variables to hold barometric pressure
+#elif defined(SENSOR_SCD30)
   SCD30 airSensor;                        ///< SCD30 airsensor object
+  float humidity { 0.0 };                   ///< Variables to hold humidity value
   float gas { 0.0 };                      ///< Variables to hold CO2 value
-#elif defined(SENSOR_BMPSHT2)
+#elif defined(SENSOR_BMP085SHT2X)
   Adafruit_BMP085 bmp;                    ///< BMP085 barometer and temperature sensor
+  float humidity { 0.0 };                   ///< Variables to hold humidity value
   float pressure { 0.0 };                 ///< Variables to hold barometric pressure
 #endif
 
@@ -120,17 +129,17 @@ PE1MEW_EEPROM_memory epromMemory;
 /// \brief setting up the node
 void setup()
 {
+  // Setup watchdog
+  MCUSR = 0;
+  wdt_disable();
+  
   // Start Particle sensor
-  my_sds.begin(9,8);  // TX and RX port that support softserial on a Arduino Leonardo
-  
-#if defined(SENSOR_SCD30)
-  /// Start the air sensor
-  airSensor.begin(); //This will cause readings to occur every interval seconds 
-#elif defined(SENSOR_BMPSHT2)
-  /// Start the bmp sensor
-  bmp.begin();
+#if defined(SENSOR_BMP280)  /// \todo modify sensor to board specific
+  my_sds.begin(MOSI,MISO);  // TX and RX port that support softserial on a marvin
+#elif
+  my_sds.begin(9,8);        // TX and RX port that support softserial on a Arduino Leonardo
 #endif
-  
+
   // Start serial ports
   loraSerial.begin(57600);
   debugSerial.begin(9600);
@@ -138,6 +147,37 @@ void setup()
   // Wait a maximum of 10s for Serial Monitor
   while (!debugSerial && millis() < 10000)
     ;
+  
+#if defined(SENSOR_BMP280)
+  Wire.begin();
+  /// Start the air sensor
+  bmx280.begin();
+  
+  if (bmx280.isBME280()){
+    Serial.println(F("BME280"));  
+  }else{
+    Serial.println(F("BMP280"));
+  }
+  //reset sensor to default parameters.
+  bmx280.resetToDefaults();
+  
+  //by default sensing is disabled and must be enabled by setting a non-zero
+  //oversampling setting.
+  //set an oversampling setting for pressure and temperature measurements. 
+  bmx280.writeOversamplingPressure(BMx280MI::OSRS_P_x16);
+  bmx280.writeOversamplingTemperature(BMx280MI::OSRS_T_x16);
+
+  //if sensor is a BME280, set an oversampling setting for humidity measurements.
+  if (bmx280.isBME280()){
+    bmx280.writeOversamplingHumidity(BMx280MI::OSRS_H_x16);
+  }
+#elif defined(SENSOR_SCD30)
+  /// Start the air sensor
+  airSensor.begin(); //This will cause readings to occur every interval seconds 
+#elif defined(SENSOR_BMP085SHT2X)
+  /// Start the bmp sensor
+  bmp.begin();
+#endif
   
   // install callback function for downlink messages
   ttn.onMessage(message);
@@ -252,9 +292,32 @@ void loop()
   // Put SDS011 to sleep
   my_sds.sleep();
 
-#if defined(SENSOR_SCD30)
+#if defined(SENSOR_BMP280)
+  bool bmx280ready = true;
+  
+  //start a measurement
+  if (!bmx280.measure()){
+    bmx280ready = false;
+  }
+
+  //wait for the measurement to finish
+  int waitCounter = 5;
+  do{
+    delay(100);
+    if(0 == waitCounter++){
+      bmx280ready = false;
+      break;
+    }
+  } while (!bmx280.hasValue());
+
+  if(bmx280ready){
+    pressure = (float)bmx280.getPressure()/100;
+    temperature = bmx280.getTemperature();
+  }
+
+#elif defined(SENSOR_SCD30)
   getSensorValues(temperature, humidity, gas, currentInterval);
-#elif defined(SENSOR_BMPSHT2)
+#elif defined(SENSOR_BMP085SHT2X)
   pressure = (float)bmp.readPressure()/100;
   humidity = getHumidity(humidity);
   temperature = getTemperature(temperature);
@@ -262,18 +325,25 @@ void loop()
 //  light = lightMeter.readLightLevel();
 #endif
 
-#if defined(SENSOR_SCD30)
-  debugSerial.print(F("CO2: "));
-  debugSerial.print(gas);
-  debugSerial.println(F(" ppm."));
-#elif defined(SENSOR_BMPSHT2)
+#if defined(SENSOR_BMP280)
   debugSerial.print(F("Barometric pressure: "));
   debugSerial.print(pressure);
   debugSerial.println(F(" Pascal."));
-#endif
+#elif defined(SENSOR_SCD30)
+  debugSerial.print(F("CO2: "));
+  debugSerial.print(gas);
+  debugSerial.println(F(" ppm."));
   debugSerial.print(F("Relative humidity: "));
   debugSerial.print(humidity);
   debugSerial.println(F(" %RH."));
+#elif defined(SENSOR_BMP085SHT2X)
+  debugSerial.print(F("Barometric pressure: "));
+  debugSerial.print(pressure);
+  debugSerial.println(F(" Pascal."));
+  debugSerial.print(F("Relative humidity: "));
+  debugSerial.print(humidity);
+  debugSerial.println(F(" %RH."));
+#endif
   debugSerial.print(F("Temperature: "));
   debugSerial.print(temperature);
   debugSerial.println(F(" C."));
@@ -284,14 +354,18 @@ void loop()
   // add sensor values to cayenne data package
   lpp.addAnalogInput(LPP_CH_VCCVOLTAGE, (float)ttn.getVDD()/1000.0);
   lpp.addTemperature(LPP_CH_TEMPERATURE, temperature);
-  lpp.addRelativeHumidity(LPP_CH_HUMIDITY, humidity);
   lpp.addLuminosity(LPP_CH_PARTICLE_25, p25Buffer.getAverage());
   lpp.addLuminosity(LPP_CH_PARTICLE_10, p10Buffer.getAverage());
   lpp.addAnalogOutput(LPP_CH_SET_INTERVAL, (float)currentInterval/1000);
-#if defined(SENSOR_SCD30)
-  lpp.addLuminosity(LPP_CH_GAS_CO2, gas);
-#elif defined(SENSOR_BMPSHT2)
+
+#if defined(SENSOR_BMP280)
   lpp.addBarometricPressure(LPP_CH_BAROMETER, pressure);
+#elif defined(SENSOR_SCD30)
+  lpp.addLuminosity(LPP_CH_GAS_CO2, gas);
+  lpp.addRelativeHumidity(LPP_CH_HUMIDITY, humidity);
+#elif defined(SENSOR_BMP085SHT2X)
+  lpp.addBarometricPressure(LPP_CH_BAROMETER, pressure);
+  lpp.addRelativeHumidity(LPP_CH_HUMIDITY, humidity);
 #endif
 
   // Send it off
@@ -361,6 +435,18 @@ void message(const uint8_t *payload, size_t size, port_t port)
         debugSerial.println(F("Wrong downlink message."));
       }
       break;
+ 
+    case 2: // Command from console
+      if(payload[0] == 0x01){
+        debugSerial.println(F("Remote reset initiated"));
+        remoteReset();
+      }
+      else
+      {
+        debugSerial.println(F("Unknown command"));
+      }
+      break;
+
     default:
       {
         for (int i = 0; i < (int)size; i++)
@@ -409,7 +495,7 @@ bool getSensorValues(float &temp,float &hum, float &co2, uint32_t &interval)
   return returnValue;
 }
 
-#elif defined(SENSOR_BMPSHT2)
+#elif defined(SENSOR_BMP085SHT2X)
 
 /// \brief read temperature from sensor 
 /// This function prevents bogous readings from sensors.
@@ -465,3 +551,14 @@ float getHumidity(float oldHumid)
   return newHumid;
 }
 #endif
+
+// \brief reset within 4 seconds while indication on led that reset is started.
+void remoteReset(void){
+  wdt_enable(WDTO_4S);
+  while (true) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(200);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(200);
+  }
+}
