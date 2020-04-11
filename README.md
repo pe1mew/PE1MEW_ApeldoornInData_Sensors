@@ -1,14 +1,16 @@
 # PE1MEW Apeldoornindata node
-A LoRa Node for the Apeldoornindata project using a TTN Uno prototype board.
+A LoRa Node for the Apeldoornindata project using Arduino Leonardo compatible boards like:
+- Things Uno
+- Marvin
+
 Selectable sensors are:
 - SCD30
 - Combination of BMP280 and SHT21 sensors
+- BMP280
 
 ### Disclaimer
-The PE1MEW Apeldoornindata node is distributed in the hope that 
-it will be useful, but WITHOUT ANY WARRANTY; without even the 
-implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR 
-PURPOSE.
+The PE1MEW Apeldoornindata node is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the 
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
   
 ### License
 The PE1MEW Apeldoornindata node is free software: 
